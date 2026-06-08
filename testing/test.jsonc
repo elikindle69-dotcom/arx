@@ -1,0 +1,54 @@
+{
+    "include": [],
+    "packages": [
+        {
+            "name": "firefox",
+            "source": "extra"
+        },
+        {
+            "name": "git",
+            "source": "extra"
+        },
+        {
+            "name": "kitty",
+            "source": "extra"
+        },
+        {
+            "name": "anyrun",
+            "source": "git",
+            "url": "https://github.com/anyrun/anyrun.git",
+            "build_options": {
+                "language": "rust",
+                "toolchain": "cargo",
+                "build_flags": []
+            }
+        },
+        {
+            "name": "hyprland",
+            "source": "git",
+            "url": "https://github.com/hyprwm/hyprland.git",
+            "build_options": {
+                "ignore_default": true,
+                "language": "c++",
+                "toolchain": "clang",
+                "build_flags": [
+                    "-DCMAKE_BUILD_TYPE=Release",
+                    "-j2"
+                ]
+            }
+        }
+    ],
+    "options": {
+        "remove_undeclared": true,
+        "default_build_options": {
+            "toolchain_c": "clang",
+            "toolchain_rust": "cargo",
+            "build_flags_rust": ["--release"],
+            "build_flags_c": [
+                "-march=native",
+                "-DCMAKE_BUILD_TYPE=Release",
+                "-j4"
+            ]
+        }
+    }
+}
