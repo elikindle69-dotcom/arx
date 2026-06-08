@@ -2,6 +2,10 @@
     "include": [],
     "packages": [
         {
+            "name": "plasma-meta",
+            "source": "extra"
+        },
+        {
             "name": "firefox",
             "source": "extra"
         },
