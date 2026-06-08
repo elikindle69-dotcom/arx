@@ -85,6 +85,7 @@ dependencies = [
  "anyhow",
  "clap",
  "json5",
+ "libc",
  "serde",
  "serde_json",
 ]
@@ -168,6 +169,12 @@ dependencies = [
  "serde",
  "ucd-trie",
 ]
+
+[[package]]
+name = "libc"
+version = "0.2.186"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
 name = "memchr"

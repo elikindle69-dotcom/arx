@@ -1,5 +1,5 @@
 use alpm::Alpm;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use crate::manifest::{BuildOptions, PackageSource, ResolvedManifest};
 use std::collections::HashSet;
 
@@ -94,6 +94,179 @@ impl InstallPlan {
 
         println!("  dry run: no changes will be applied");
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.missing_packages.is_empty() && (self.undeclared_installed.is_empty() || !self.prune_undeclared)
+    }
+
+    pub fn print_removal_details(&self) -> Result<()> {
+        if !self.prune_undeclared || self.undeclared_installed.is_empty() {
+            return Ok(());
+        }
+
+        let alpm = Alpm::new("/", "/var/lib/pacman")
+            .context("failed to initialize alpm for dependency analysis")?;
+
+        let localdb = alpm.localdb();
+
+        println!("\n⚠️  Removal Analysis (packages that will be removed):");
+        
+        for removed_pkg_name in &self.undeclared_installed {
+            print!("  - {} ", removed_pkg_name);
+
+            // Try to get package info for group membership
+            if let Ok(pkg) = localdb.pkg(removed_pkg_name.as_str()) {
+                let mut details = Vec::new();
+
+                // Get the package size info
+                let size = pkg.download_size();
+                if size > 0 {
+                    details.push(format!("{}KB", size / 1024));
+                }
+
+                // Get groups this package belongs to
+                let groups: Vec<String> = pkg.groups()
+                    .iter()
+                    .map(|g| g.to_string())
+                    .collect();
+                if !groups.is_empty() {
+                    details.push(format!("groups: {}", groups.join(", ")));
+                }
+
+                if !details.is_empty() {
+                    println!("({})", details.join(", "));
+                } else {
+                    println!();
+                }
+            } else {
+                println!();
+            }
+
+            // Check if any declared packages depend on this removed package
+            let mut dependents = Vec::new();
+            for pkg in self.packages.iter() {
+                if pkg.installed {
+                    if let Ok(installed_pkg) = localdb.pkg(pkg.name.as_str()) {
+                        let depends: Vec<&str> = installed_pkg
+                            .depends()
+                            .iter()
+                            .filter_map(|dep| {
+                                let dep_str = dep.to_string();
+                                // Extract package name from dependency string (before version specs)
+                                if let Some(dep_name) = dep_str.split(|c| c == '>' || c == '<' || c == '=' || c == '!').next() {
+                                    if dep_name == removed_pkg_name {
+                                        Some(pkg.name.as_str())
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        
+                        if !depends.is_empty() {
+                            dependents.extend(depends);
+                        }
+                    }
+                }
+            }
+
+            if !dependents.is_empty() {
+                println!("    ⚠️  WARNING: Required by declared packages: {}", dependents.join(", "));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn apply(&self) -> Result<()> {
+        // Check for root permissions
+        if unsafe { libc::geteuid() } != 0 {
+            return Err(anyhow!(
+                "package management requires root privileges. Try: sudo arx apply <manifest>"
+            ));
+        }
+
+        let mut alpm = Alpm::new("/", "/var/lib/pacman")
+            .context("failed to initialize alpm for package operations")?;
+
+        alpm.trans_init(alpm::TransFlag::NONE)
+            .context("failed to initialize ALPM transaction")?;
+
+        // Pre-flight check: verify all packages exist before starting transaction
+        for package in &self.missing_packages {
+            match &package.source {
+                PackageSource::Core | PackageSource::Extra => {
+                    verify_repo_package(&alpm, &package.name)?;
+                }
+                PackageSource::Aur => {
+                    eprintln!("warning: AUR package '{}' cannot be installed yet (not implemented)", package.name);
+                }
+                PackageSource::Git => {
+                    eprintln!("warning: git package '{}' cannot be installed yet (not implemented)", package.name);
+                }
+            }
+        }
+
+        // Add packages that need to be installed
+        for package in &self.missing_packages {
+            match &package.source {
+                PackageSource::Core | PackageSource::Extra => {
+                    add_repo_package(&mut alpm, &package.name)?;
+                }
+                PackageSource::Aur | PackageSource::Git => {
+                    // Already warned in pre-flight check
+                }
+            }
+        }
+
+        // Remove packages that are undeclared
+        if self.prune_undeclared {
+            let localdb = alpm.localdb();
+            for pkg_name in &self.undeclared_installed {
+                if let Ok(pkg) = localdb.pkg(pkg_name.as_str()) {
+                    alpm.trans_remove_pkg(pkg)
+                        .with_context(|| format!("failed to queue removal of package '{}'", pkg_name))?;
+                }
+            }
+        }
+
+        // Prepare the transaction
+        let prep_err = match alpm.trans_prepare() {
+            Err(e) => {
+                let msg = e.to_string();
+                drop(e);
+                Some(msg)
+            }
+            Ok(_) => None,
+        };
+
+        if let Some(msg) = prep_err {
+            let _ = alpm.trans_release();
+            return Err(anyhow!("transaction preparation failed: {}", msg));
+        }
+
+        // Commit the transaction
+        let commit_err = match alpm.trans_commit() {
+            Err(e) => {
+                let msg = e.to_string();
+                drop(e);
+                Some(msg)
+            }
+            Ok(_) => None,
+        };
+
+        if let Some(msg) = commit_err {
+            let _ = alpm.trans_release();
+            return Err(anyhow!("transaction commit failed: {}", msg));
+        }
+
+        alpm.trans_release()
+            .context("failed to release ALPM transaction")?;
+
+        Ok(())
+    }
 }
 
 fn source_label(source: &PackageSource) -> &'static str {
@@ -113,4 +286,26 @@ fn installed_package_names(alpm: &Alpm) -> Result<HashSet<String>> {
         .map(|pkg| pkg.name().to_string())
         .collect();
     Ok(names)
+}
+
+fn add_repo_package(alpm: &mut Alpm, pkg_name: &str) -> Result<()> {
+    let syncdbs = alpm.syncdbs();
+    for db in syncdbs.iter() {
+        if let Ok(pkg) = db.pkg(pkg_name) {
+            alpm.trans_add_pkg(pkg)
+                .map_err(|e| anyhow!("failed to add package '{}' to transaction: {}", pkg_name, e.error))?;
+            return Ok(());
+        }
+    }
+    Err(anyhow!("package '{}' not found in any sync database", pkg_name))
+}
+
+fn verify_repo_package(alpm: &Alpm, pkg_name: &str) -> Result<()> {
+    let syncdbs = alpm.syncdbs();
+    for db in syncdbs.iter() {
+        if db.pkg(pkg_name).is_ok() {
+            return Ok(());
+        }
+    }
+    Err(anyhow!("package '{}' not found in any sync database", pkg_name))
 }

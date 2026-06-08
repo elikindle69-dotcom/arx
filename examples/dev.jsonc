@@ -1,0 +1,19 @@
+{
+    "include": ["./base.jsonc"],
+    
+    "packages": [
+        { "name": "rust", "source": "extra" },
+        { "name": "cargo", "source": "extra" },
+        { "name": "clang", "source": "extra" }
+    ],
+    
+    "options": {
+        "remove_undeclared": false,
+        "default_build_options": {
+            "toolchain_rust": "cargo",
+            "toolchain_c": "clang",
+            "build_flags_rust": ["--release"],
+            "build_flags_c": ["-O3"]
+        }
+    }
+}

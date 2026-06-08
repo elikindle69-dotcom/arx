@@ -1,0 +1,13 @@
+{
+    "packages": [
+        // Core utilities
+        { "name": "base", "source": "core" },
+        { "name": "linux", "source": "core" },
+        { "name": "linux-firmware", "source": "core" },
+        
+        // Development tools
+        { "name": "git", "source": "extra" },
+        { "name": "vim", "source": "extra" },
+        { "name": "base-devel", "source": "core" }
+    ]
+}
