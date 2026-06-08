@@ -40,7 +40,8 @@ pub fn run() -> Result<()> {
             let resolved = ResolvedManifest::load(&manifest)
                 .with_context(|| format!("failed to load manifest {manifest:?}"))?;
             resolved.validate().with_context(|| format!("manifest {manifest:?} is invalid"))?;
-            let plan = InstallPlan::from_manifest(&resolved);
+            let plan = InstallPlan::from_manifest(&resolved)
+                .with_context(|| "failed to generate package plan using ALPM")?;
             plan.print_summary();
         }
     }
